@@ -1,17 +1,538 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
-	<head>
-		<title>canvasExample</title>
-        <meta charset='utf-8' />
-	</head>
-	<body>
-        <span>Hello world</span>
-		<div><canvas height='320' width='480' id='example'>Iaiiaeoa a?aoca?</canvas></div>
-        <span>Bye world</span>
-		<script>
-			var example = document.getElementById("example"),
-			    ctx     = example.getContext('2d');
-			ctx.fillRect(0, 0, example.width, example.height);
-		</script>
-	</body>
+<head>
+    <meta charset="UTF-8">
+    <title>Heap visualization</title>
+</head>
+<body>
+<div style="text-align: center;"><h1>Binary heap: extracting element</h1></div>
+
+
+<canvas id="canvas">canvas</canvas>
+<canvas id="legend" height="120">legend</canvas>
+
+<div>
+    <label for="vertexNum">Heap size: </label><input id="vertexNum" value="31" size="5">
+    <button id="generate">Generate</button>
+    <label> Animation speed:
+        <input id="speed" type="range" min="50" max="200" value="100">
+    </label>
+</div>
+<div>
+    <button id="start">Start visualisation</button>
+    <button id="nextStep">Next step</button>
+    <button id="finish">Finish visualisation</button>
+</div>
+<div>
+    <label for="heapset">Input your heap: </label><input id="heapset" placeholder="1,2,3">
+    <button id="drawheap">Draw</button>
+    <button id="priority">Change priority</button>
+</div>
+</body>
+
+<script lang="text/javascript">
+    var canvas = document.getElementById("canvas");
+    var canvasCtx = canvas.getContext('2d');
+
+    canvas.width = ~~(window.screen.width * 0.95);
+    canvas.height = ~~(window.screen.height * 0.45);
+
+    // Canvas for map legend
+    var legend = document.getElementById("legend");
+    var legendCtx = legend.getContext('2d');
+
+    legend.width = canvas.width;
+
+    var startButton = document.getElementById("start");
+    legendCtx.font = "20px Arial";
+
+
+    /**
+     Heap-defining variables:
+     minPriority shows whether heap is min-heap or max-heap
+     maxDif shows maximum difference between son and parent nodes' values
+     maxSize defines maximum size of the heap
+     */
+    var minPriority = true;
+    var maxDif = 5;
+    var maxSize = 31;
+
+
+    /**
+     Variables for animation:
+     updateFrequency shows one time step in animation in ms
+     partsAmount shows how much steps take one swap
+     epsilon is upper boundary for distance between nodes that can be considered as 0
+     animationDelay shows delay between each part of animation (e.g. between two swaps) in ms
+     nodeRadius shows nodes' radius (because of the black border it's nodeRadius + 1)
+     startedExtract is true after you start visualisation and till the very end
+     isMoving is true if there's any animation right now
+     */
+    var updateFrequency = 10;
+    var partsAmount = 100;
+    var epsilon = 10;
+    var animationDelay = 750;
+    var nodeRadius = 30;
+    var startedExtract = false;
+    var isMoving = false;
+
+
+    /**
+     Logical representation of all the data:
+     heap[] stores heap
+     coords[] stores nodes' coordinates (coords[i].x or coords[i].y) and their "borders" used for drawing
+     swapped[] stores pairs of nodes which are swapping
+     */
+    var heap = [];
+    var coords = [];
+    var swapped = [];
+
+
+    //TODO: choose better colors
+    var yellow = "yellow";
+    var red = "red";
+    var green = "green";
+    var grey = "grey";
+    var blue = "blue";
+
+
+    drawLegend();
+
+    function drawLegend() {
+        clearCanvas(legendCtx, legend);
+
+        drawCircle(legendCtx, ~~(legend.width / 2), 35, "", green);
+        legendCtx.fillText("If current node is " + (minPriority ? "greater" : "lower"), ~~(legend.width / 2) - 100, 90);
+        legendCtx.fillText("than parent node or they are equal", ~~(legend.width / 2) - 145, 110);
+
+        drawCircle(legendCtx, ~~(legend.width / 4), 35, "", red);
+        legendCtx.fillText("If current node is " + (!minPriority ? "greater" : "lower"), ~~(legend.width / 4) - 100, 90);
+        legendCtx.fillText("than parent node", ~~(legend.width / 4) - 80, 110);
+
+        drawCircle(legendCtx, ~~(3 * legend.width / 4), 35, "", grey);
+        legendCtx.fillText("If node is swapping", ~~(3 * legend.width / 4) - 90, 90);
+        legendCtx.fillText("right now", ~~(3 * legend.width / 4) - 40, 110)
+    }
+
+
+    function drawCircle(ctx, x, y, value, color) {
+        ctx.fillStyle = "black";
+        ctx.beginPath();
+        ctx.arc(x, y, nodeRadius + 1, 0, 2 * Math.PI, false);
+        ctx.closePath();
+        ctx.fill();
+
+        if (value === "empty") {
+            ctx.fillStyle = "white";
+            value = "";
+        } else {
+            ctx.fillStyle = color;
+        }
+
+        ctx.beginPath();
+        ctx.arc(x, y, nodeRadius, 0, 2 * Math.PI, false);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "black";
+        ctx.font = "20px Arial";
+        ctx.fillText((value < 10 ? " " : "") + value, x - 10, y + 4);
+    }
+
+    //animate param shows if nodes coordinates should be calculated again or not
+    function draw(animate) {
+        function getColor(son, parent) {
+            if (parent === null) return green;
+            if ((son < parent && minPriority) || (son > parent && !minPriority)) return red;
+            return green;
+        }
+
+        function calcNodes() {
+            coords[0] = null;
+            coords[1] = {x: canvas.width / 2, y: 40, left: 0, right: canvas.width};
+
+            for (var i = 2; i < heap.length; i++) {
+                var parent = ~~(i / 2);
+                var x, y, l, r;
+
+                if (i % 2 === 0) {
+                    l = coords[parent].left;
+                    r = coords[parent].x;
+                } else {
+                    l = coords[parent].x;
+                    r = coords[parent].right;
+                }
+
+                x = (l + r) / 2;
+                y = coords[parent].y + 2 * nodeRadius;
+                coords[i] = {x: x, y: y, left: l, right: r};
+            }
+
+            drawNodes();
+        }
+
+        function getValue(i) {
+            return swapped.length === 0 ? heap[i] : swapped[0].index === i || swapped[1].index === i ? "empty" : heap[i]
+        }
+
+
+        function drawNodes() {
+            for (var i = 1; i < heap.length; i++) {
+                drawCircle(canvasCtx, coords[i].x, coords[i].y, getValue(i), getColor(heap[i], heap[~~(i / 2)]));
+            }
+        }
+
+        //draw all edges in heap
+        function drawEdges() {
+
+            function drawEdge(a, b) {
+                canvasCtx.beginPath();
+                var startPoint = getPointOnCircle(a, b, nodeRadius), endPoint = getPointOnCircle(b, a, nodeRadius);
+                canvasCtx.moveTo(startPoint.x, startPoint.y);
+                canvasCtx.lineTo(endPoint.x, endPoint.y);
+                canvasCtx.stroke();
+            }
+
+
+            for (var i = heap.length - 1; i > 1; i--) {
+                drawEdge(coords[i], coords[~~(i / 2)]);
+            }
+        }
+
+
+        function drawSwappingNodes() {
+            for (var i = 0; i < swapped.length; i++) {
+                drawCircle(canvasCtx, swapped[i].coords.x, swapped[i].coords.y, heap[swapped[i].index], grey);
+            }
+        }
+
+
+        if (!animate) calcNodes();
+        else drawNodes();
+
+        drawEdges();
+        drawSwappingNodes();
+    }
+
+
+    function generateHeap() {
+        var n = Math.abs(parseInt(document.getElementById("vertexNum").value));
+
+        function nextInt() {
+            return ~~(Math.random() * maxDif) + 1;
+        }
+
+        if (isNaN(n) || n > maxSize || n <= 0) n = 15;
+
+        document.getElementById("vertexNum").value = n;
+
+        heap = [];
+        heap[0] = null;
+
+        var min, c = minPriority ? 1 : -1;
+
+        heap[1] = nextInt();
+        min = nextInt();
+
+        for (var i = 2; i <= n; i++) {
+            heap[i] = heap[~~(i / 2)] + (c * nextInt());
+            if (heap[i] < min) min = heap[i];
+        }
+
+        if (!minPriority && min <= 0) {
+            var addition = -min + nextInt();
+            for (var i = 1; i <= n; i++) {
+                heap[i] += addition;
+            }
+        }
+
+        redraw(false);
+    }
+
+    function clearCanvas(ctx, canvas) {
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function redraw(animate) {
+        clearCanvas(canvasCtx, canvas);
+        draw(animate)
+    }
+
+    function finishVisualisation() {
+        if (!startedExtract) return;
+        finished = true;
+    }
+
+    document.getElementById("priority").addEventListener("click", function () {
+        if (startedExtract) {
+            alert("Animation is in process" + "\n" + "Can't change priority now");
+            return;
+        }
+        minPriority = !minPriority;
+        drawLegend();
+        generateHeap();
+    });
+
+    function getPointOnCircle(a, b, dist) {
+        var cos = (a.x - b.x) / distance(a, b),
+            sin = (a.y - b.y) / distance(a, b),
+            x = a.x - dist * cos,
+            y = a.y - dist * sin;
+        return {x: x, y: y}
+    }
+
+    function distance(a, b) {
+        return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2))
+    }
+
+
+    document.getElementById("generate").addEventListener("click", function () {
+        if (startedExtract) {
+            finishVisualisation();
+            //sadly, animation doesn't end right at the moment of calling finishVisualisation function
+            var timer = setInterval(function () {
+                if (!startedExtract) {
+                    clearInterval(timer);
+                    generateHeap()
+                }
+            }, updateFrequency)
+        } else {
+            generateHeap();
+        }
+    });
+
+
+    var paused = false;
+    var nextStep = false;
+    var finished = false;
+
+    function start() {
+        if (paused) {
+            startButton.firstChild.data = "Pause visualisation";
+            paused = false;
+            return
+        }
+        if (startedExtract) {
+            startButton.firstChild.data = "Resume visualisation";
+            paused = true;
+            return;
+        }
+
+        if (heap.length < 1) return;
+
+        startedExtract = true;
+        startButton.firstChild.data = "Pause visualisation";
+        var order = [];
+        var dateStopped = Date.now() - animationDelay;
+
+        // swap animation
+        function swapNodes(i, j) {
+            var deltaX = (coords[j].x - coords[i].x) / partsAmount;
+            var deltaY = (coords[j].y - coords[i].y) / partsAmount;
+            swapped = [{coords: copyArray(coords[i]), index: i}, {coords: copyArray(coords[j]), index: j}];
+            isMoving = true;
+
+            var timer = setInterval(function () {
+
+                if (distance(swapped[0].coords, coords[j]) < epsilon || finished) {
+
+                    if (!finished && nextStep) {
+                        nextStep = false;
+                        paused = true;
+                        startButton.firstChild.data = "Resume visualisation";
+                    }
+                    swap(heap, i, j);
+                    swapped = [];
+                    isMoving = false;
+                    dateStopped = Date.now();
+                    clearInterval(timer)
+                } else {
+                    swapped[0].coords.x += deltaX * speed.value / 200;
+                    swapped[0].coords.y += deltaY * speed.value / 200;
+                    swapped[1].coords.x -= deltaX * speed.value / 200;
+                    swapped[1].coords.y -= deltaY * speed.value / 200;
+                }
+                redraw(true)
+            }, updateFrequency)
+        }
+
+        //animate instructions given by sift-down function
+        function processOrder() {
+            var timer = setInterval(function () {
+                if (finished) {
+                    if (isMoving) return;
+                    paused = false;
+                    finished = false;
+                    startedExtract = false;
+                    for (var i = 0; i < order.length; i++) {
+                        if (order[i].type === "delete") {
+                            heap.pop();
+                            coords.pop()
+                        } else {
+                            swap(heap, order[i].i, order[i].j);
+                        }
+
+                    }
+                    order = [];
+                    redraw(true);
+                }
+                if (!isMoving && paused && nextStep ||
+                    (!isMoving && !paused && Date.now() - dateStopped >= animationDelay)) {
+                    if (paused) nextStep = false;
+                    if (order.length !== 0) {
+                        var topOrder = order.shift();
+                        if (topOrder.type === "delete") {
+                            heap.pop();
+                            coords.pop();
+                            dateStopped = Date.now();
+                            redraw(true);
+                        } else {
+                            swapNodes(topOrder.i, topOrder.j);
+                            if (order.length === 0 && paused) {
+                                startedExtract = false;
+                                paused = false;
+                                startButton.firstChild.data = "Start visualisation";
+                                clearInterval(timer);
+                            }
+                        }
+                    } else {
+                        startedExtract = false;
+                        paused = false;
+                        startButton.firstChild.data = "Start visualisation";
+                        clearInterval(timer);
+                    }
+                }
+            }, updateFrequency)
+        }
+
+        processOrder();
+
+
+        //perform sifting down and prepare instructions for animating function
+        function siftDown() {
+            var i = 1;
+            var dupHeap = heap.slice(0);
+            swap(dupHeap, 1, dupHeap.length - 1);
+            dupHeap.pop();
+
+            order.push({i: i, j: heap.length - 1, type: "swap"});
+            order.push({i: i, j: heap.length - 1, type: "delete"});
+
+            while (i < dupHeap.length) {
+                if (i * 2 + 1 < dupHeap.length) {
+                    var min = Math.min(dupHeap[i * 2], dupHeap[i * 2 + 1]);
+                    var max = Math.max(dupHeap[i * 2], dupHeap[i * 2 + 1]);
+                    var index, flag = false;
+                    if ((minPriority && dupHeap[i] > min)) {
+                        index = dupHeap[i * 2] < dupHeap[i * 2 + 1] ? i * 2 : i * 2 + 1;
+                        flag = true;
+                    }
+                    if ((!minPriority && dupHeap[i] < max)) {
+                        index = dupHeap[i * 2] > dupHeap[i * 2 + 1] ? i * 2 : i * 2 + 1;
+                        flag = true;
+                    }
+                    if (!flag) break;
+                    order.push({i: i, j: index, type: "swap"});
+                    swap(dupHeap, i, index);
+                    i = index;
+                } else {
+                    if (i * 2 < dupHeap.length && (minPriority && dupHeap[i * 2] < dupHeap[i] || !minPriority && dupHeap[i * 2] > dupHeap[i])) {
+                        order.push({i: i, j: i * 2, type: "swap"});
+                        swap(dupHeap, i, i * 2);
+                        i *= 2;
+                    } else break;
+                }
+
+            }
+        }
+
+        processOrder();
+        siftDown();
+    }
+
+    document.getElementById("finish").addEventListener("click", finishVisualisation);
+
+    document.getElementById("nextStep").addEventListener("click", function () {
+        nextStep = true;
+        if (!startedExtract) start()
+    });
+
+    // Start visualization
+    startButton.addEventListener("click", start);
+
+    document.getElementById("drawheap").addEventListener("click", function () {
+
+        var num, duplicatedHeap = [null];
+        var str = document.getElementById("heapset").value.split(",");
+
+
+        //priority variable defines whether heap is built as min-heap(priority is true)
+        //or heap is max-heap(priority is false)
+        function parse(priority) {
+            for (var i = 0; i < str.length; i++) {
+                num = parseInt(str[i]);
+                if (isNaN(num)) {
+                    alert("Incorrect value " + str[i] + "\n" + "Please input correct heap");
+                    return "error"
+                }
+                if (i !== 0 && (priority && num < duplicatedHeap[~~((i + 1) / 2)] || !priority && num > duplicatedHeap[~~((i + 1) / 2)])) {
+                    return false
+                }
+                duplicatedHeap[i + 1] = num;
+            }
+            return true
+        }
+
+
+        function parseAndDraw() {
+            if (parse(true) === "error")
+                return;
+            else if (parse(true))
+                minPriority = true;
+            else if (parse(false))
+                minPriority = false;
+            else {
+                alert("Heap is not balanced");
+                return;
+            }
+            heap = duplicatedHeap;
+            coords = [];
+            drawLegend();
+            redraw(false);
+        }
+
+
+        if (startedExtract) {
+            finishVisualisation();
+            //again :(
+            var timer = setInterval(function () {
+                if (!startedExtract) {
+                    clearInterval(timer);
+                    parseAndDraw()
+                }
+            }, updateFrequency)
+        } else {
+            parseAndDraw();
+        }
+
+    });
+
+    function swap(a, i, j) {
+        var temp = a[i];
+        a[i] = a[j];
+        a[j] = temp;
+    }
+
+
+    function copyArray(a) {
+        var b = {};
+        for (var i in a)
+            b[i] = a[i];
+        return b
+    }
+
+    generateHeap();
+
+</script>
 </html>
