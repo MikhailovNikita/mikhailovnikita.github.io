@@ -464,7 +464,11 @@
     document.getElementById("drawheap").addEventListener("click", function () {
 
         var num, duplicatedHeap = [null];
-        var str = document.getElementById("heapset").value.split(",");
+        var str = document.getElementById("heapset").value.split(",")
+        if(str.length > 31){
+            alert("Heap size is reduced to 31");
+            str = str.slice(0,31);
+        }
 
 
         //priority variable defines whether heap is built as min-heap(priority is true)
